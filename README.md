@@ -31,13 +31,47 @@ August locks without a WiFi bridge (or with a dead one) can only be controlled v
 
 ## Extracting the Offline Key
 
-The offline key must be obtained from the August API using your account credentials:
+The offline key must be obtained from the August API. You can use the [yalexs](https://github.com/bdraco/yalexs) library directly, or use a helper script:
 
-1. Authenticate with August API (email + 2FA verification code)
-2. List locks on account
-3. Extract the offline key and key slot from the lock's key list
+### Using yalexs (Python)
 
-The key is a 32-character hex string with an associated slot number.
+```bash
+pip install yalexs
+python3 -c "
+from yalexs.api import Api
+from yalexs.authenticator import Authenticator, AuthenticationState, ValidationResult
+import json
+
+api = Api()
+auth = Authenticator(api, 'email', 'your@email.com', 'YourPassword', access_token_cache_file='token.json')
+state = auth.authenticate()
+
+# If state == REQUIRES_VALIDATION, check your email for a code:
+# auth.send_verification_code()
+# auth.validate_verification_code('123456')
+# state = auth.authenticate()  # retry after validation
+
+api_instance = api
+locks = api_instance.get_locks(auth.get_access_token())
+for lock in locks:
+    print(f'Lock: {lock.device_name}, ID: {lock.device_id}')
+    keys = api_instance.get_lock_detail(auth.get_access_token(), lock.device_id)
+    # Offline key is in the lock's key list
+"
+```
+
+> **Note:** The yalexs library's built-in `AuthenticatorAsync` may return 403 errors due to API key changes. If so, use the August API directly with the key `79fd0eb6-381d-4adf-95a0-47721289d1d9` and header `x-august-api-key`.
+
+### Alternative: august2mqtt key extractor
+
+The [august2mqtt](https://github.com/codyc1515/august2mqtt) project includes key extraction tooling. Clone it and follow its auth instructions to extract offline keys.
+
+### What you need
+
+After extraction, you'll have:
+- **Offline key**: 32-character hex string (e.g. `a1b2c3d4e5f6...`)
+- **Key slot**: integer (usually 0-4)
+- **Lock ID**: UUID of the lock (e.g. `4A133E63-1ED7-4031-8389-9A55750A245C`)
 
 ## Setup
 
