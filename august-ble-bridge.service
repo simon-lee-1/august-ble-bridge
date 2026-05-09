@@ -1,0 +1,15 @@
+[Unit]
+Description=August BLE-to-MQTT Bridge
+After=network-online.target bluetooth.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/august-ble-bridge
+ExecStart=/opt/august-ble-bridge/venv/bin/python3 /opt/august-ble-bridge/august_ble_bridge.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
