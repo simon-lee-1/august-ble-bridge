@@ -6,6 +6,9 @@ publishes state to MQTT with HA auto-discovery, and accepts
 lock/unlock commands.
 """
 
+import sdnotify
+_sd = sdnotify.SystemdNotifier()
+
 import asyncio
 import json
 import logging
@@ -136,6 +139,7 @@ def publish_discovery(client: mqtt.Client):
     )
 
     log.info("MQTT discovery configs published")
+    _sd.notify("READY=1")
 
 
 # ---------------------------------------------------------------------------
@@ -183,13 +187,29 @@ class AugustBLEBridge:
             )
 
     async def run(self):
-        """Main BLE connection loop with reconnection."""
-        reconnect_delay = RECONNECT_DELAY_MIN
+        """Main BLE connection loop with passive scan."""
+        from bleak import BleakScanner
 
         while self._running:
             try:
-                log.info(f"Connecting to lock {LOCK_NAME} at {LOCK_MAC}...")
+                # Passive scan: wait until we actually see the lock advertising
+                log.info(f"Scanning for lock {LOCK_NAME} ({LOCK_MAC})...")
+                device = None
+                while self._running and device is None:
+                    found = await BleakScanner.discover(timeout=10, return_adv=True)
+                    for addr, (dev, adv) in found.items():
+                        if addr.upper() == LOCK_MAC.upper():
+                            device = dev
+                            log.info(f"Lock found (RSSI: {adv.rssi})")
+                            break
+                    if device is None:
+                        _sd.notify("WATCHDOG=1")
+                        await asyncio.sleep(5)
 
+                if not self._running:
+                    break
+
+                log.info(f"Connecting to lock {LOCK_NAME} at {LOCK_MAC}...")
                 self.lock = PushLock(
                     address=LOCK_MAC,
                     key=LOCK_KEY,
@@ -197,13 +217,10 @@ class AugustBLEBridge:
                     always_connected=True,
                 )
 
-                # start() does device discovery internally
                 self._cancel_lock = await self.lock.start()
                 await self.lock.wait_for_first_update(timeout=30.0)
-                # Register callback after first update so connection_info is populated
                 self.lock.register_callback(self._state_callback)
                 log.info("BLE connected to lock")
-                # Publish initial state
                 if self.lock.lock_state:
                     self._state_callback(
                         self.lock.lock_state,
@@ -211,7 +228,6 @@ class AugustBLEBridge:
                         self.lock.connection_info,
                     )
                 self.mqtt.publish(AVAILABILITY_TOPIC, "online", qos=1, retain=True)
-                reconnect_delay = RECONNECT_DELAY_MIN
 
                 # Process commands while connected
                 while self._running and self.lock.is_connected:
@@ -228,7 +244,7 @@ class AugustBLEBridge:
                             await self.lock.unlock()
                             log.info("Unlock command sent")
                     except asyncio.TimeoutError:
-                        # No command, just keep alive
+                        _sd.notify("WATCHDOG=1")
                         pass
                     except Exception as e:
                         log.error(f"Command error: {e}")
@@ -240,8 +256,7 @@ class AugustBLEBridge:
                 log.error(f"BLE error: {e}")
                 self.mqtt.publish(AVAILABILITY_TOPIC, "offline", qos=1, retain=True)
 
-            await asyncio.sleep(reconnect_delay)
-            reconnect_delay = min(reconnect_delay * 2, RECONNECT_DELAY_MAX)
+            await asyncio.sleep(10)
 
     def stop(self):
         self._running = False
